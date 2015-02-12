@@ -19,14 +19,15 @@ package org.apache.spark.sql.catalyst.optimizer
 
 import org.apache.spark.sql.catalyst.analysis
 import org.apache.spark.sql.catalyst.analysis.EliminateAnalysisOperators
+import org.apache.spark.sql.catalyst.expressions.Explode
 import org.apache.spark.sql.catalyst.plans.logical._
+import org.apache.spark.sql.catalyst.plans.{PlanTest, LeftOuter, RightOuter}
 import org.apache.spark.sql.catalyst.rules._
-
-/* Implicit conversions */
 import org.apache.spark.sql.catalyst.dsl.plans._
 import org.apache.spark.sql.catalyst.dsl.expressions._
+import org.apache.spark.sql.types.IntegerType
 
-class FilterPushdownSuite extends OptimizerTest {
+class FilterPushdownSuite extends PlanTest {
 
   object Optimize extends RuleExecutor[LogicalPlan] {
     val batches =
@@ -35,7 +36,8 @@ class FilterPushdownSuite extends OptimizerTest {
       Batch("Filter Pushdown", Once,
         CombineFilters,
         PushPredicateThroughProject,
-        PushPredicateThroughInnerJoin) :: Nil
+        PushPredicateThroughJoin,
+        PushPredicateThroughGenerate) :: Nil
   }
 
   val testRelation = LocalRelation('a.int, 'b.int, 'c.int)
@@ -162,6 +164,184 @@ class FilterPushdownSuite extends OptimizerTest {
     comparePlans(optimized, correctAnswer)
   }
 
+  test("joins: push down left outer join #1") {
+    val x = testRelation.subquery('x)
+    val y = testRelation.subquery('y)
+
+    val originalQuery = {
+      x.join(y, LeftOuter)
+        .where("x.b".attr === 1 && "y.b".attr === 2)
+    }
+
+    val optimized = Optimize(originalQuery.analyze)
+    val left = testRelation.where('b === 1)
+    val correctAnswer =
+      left.join(y, LeftOuter).where("y.b".attr === 2).analyze
+
+    comparePlans(optimized, correctAnswer)
+  }
+
+  test("joins: push down right outer join #1") {
+    val x = testRelation.subquery('x)
+    val y = testRelation.subquery('y)
+
+    val originalQuery = {
+      x.join(y, RightOuter)
+        .where("x.b".attr === 1 && "y.b".attr === 2)
+    }
+
+    val optimized = Optimize(originalQuery.analyze)
+    val right = testRelation.where('b === 2).subquery('d)
+    val correctAnswer =
+      x.join(right, RightOuter).where("x.b".attr === 1).analyze
+
+    comparePlans(optimized, correctAnswer)
+  }
+
+  test("joins: push down left outer join #2") {
+    val x = testRelation.subquery('x)
+    val y = testRelation.subquery('y)
+
+    val originalQuery = {
+      x.join(y, LeftOuter, Some("x.b".attr === 1))
+        .where("x.b".attr === 2 && "y.b".attr === 2)
+    }
+
+    val optimized = Optimize(originalQuery.analyze)
+    val left = testRelation.where('b === 2).subquery('d)
+    val correctAnswer =
+      left.join(y, LeftOuter, Some("d.b".attr === 1)).where("y.b".attr === 2).analyze
+
+    comparePlans(optimized, correctAnswer)
+  }
+
+  test("joins: push down right outer join #2") {
+    val x = testRelation.subquery('x)
+    val y = testRelation.subquery('y)
+
+    val originalQuery = {
+      x.join(y, RightOuter, Some("y.b".attr === 1))
+        .where("x.b".attr === 2 && "y.b".attr === 2)
+    }
+
+    val optimized = Optimize(originalQuery.analyze)
+    val right = testRelation.where('b === 2).subquery('d)
+    val correctAnswer =
+      x.join(right, RightOuter, Some("d.b".attr === 1)).where("x.b".attr === 2).analyze
+
+    comparePlans(optimized, correctAnswer)
+  }
+
+  test("joins: push down left outer join #3") {
+    val x = testRelation.subquery('x)
+    val y = testRelation.subquery('y)
+
+    val originalQuery = {
+      x.join(y, LeftOuter, Some("y.b".attr === 1))
+        .where("x.b".attr === 2 && "y.b".attr === 2)
+    }
+
+    val optimized = Optimize(originalQuery.analyze)
+    val left = testRelation.where('b === 2).subquery('l)
+    val right = testRelation.where('b === 1).subquery('r)
+    val correctAnswer =
+      left.join(right, LeftOuter).where("r.b".attr === 2).analyze
+
+    comparePlans(optimized, correctAnswer)
+  }
+
+  test("joins: push down right outer join #3") {
+    val x = testRelation.subquery('x)
+    val y = testRelation.subquery('y)
+
+    val originalQuery = {
+      x.join(y, RightOuter, Some("y.b".attr === 1))
+        .where("x.b".attr === 2 && "y.b".attr === 2)
+    }
+
+    val optimized = Optimize(originalQuery.analyze)
+    val right = testRelation.where('b === 2).subquery('r)
+    val correctAnswer =
+      x.join(right, RightOuter, Some("r.b".attr === 1)).where("x.b".attr === 2).analyze
+
+    comparePlans(optimized, correctAnswer)
+  }
+
+  test("joins: push down left outer join #4") {
+    val x = testRelation.subquery('x)
+    val y = testRelation.subquery('y)
+
+    val originalQuery = {
+      x.join(y, LeftOuter, Some("y.b".attr === 1))
+        .where("x.b".attr === 2 && "y.b".attr === 2 && "x.c".attr === "y.c".attr)
+    }
+
+    val optimized = Optimize(originalQuery.analyze)
+    val left = testRelation.where('b === 2).subquery('l)
+    val right = testRelation.where('b === 1).subquery('r)
+    val correctAnswer =
+      left.join(right, LeftOuter).where("r.b".attr === 2 && "l.c".attr === "r.c".attr).analyze
+
+    comparePlans(optimized, correctAnswer)
+  }
+
+  test("joins: push down right outer join #4") {
+    val x = testRelation.subquery('x)
+    val y = testRelation.subquery('y)
+
+    val originalQuery = {
+      x.join(y, RightOuter, Some("y.b".attr === 1))
+        .where("x.b".attr === 2 && "y.b".attr === 2 && "x.c".attr === "y.c".attr)
+    }
+
+    val optimized = Optimize(originalQuery.analyze)
+    val left = testRelation.subquery('l)
+    val right = testRelation.where('b === 2).subquery('r)
+    val correctAnswer =
+      left.join(right, RightOuter, Some("r.b".attr === 1)).
+        where("l.b".attr === 2 && "l.c".attr === "r.c".attr).analyze
+
+    comparePlans(optimized, correctAnswer)
+  }
+
+  test("joins: push down left outer join #5") {
+    val x = testRelation.subquery('x)
+    val y = testRelation.subquery('y)
+
+    val originalQuery = {
+      x.join(y, LeftOuter, Some("y.b".attr === 1 && "x.a".attr === 3))
+        .where("x.b".attr === 2 && "y.b".attr === 2 && "x.c".attr === "y.c".attr)
+    }
+
+    val optimized = Optimize(originalQuery.analyze)
+    val left = testRelation.where('b === 2).subquery('l)
+    val right = testRelation.where('b === 1).subquery('r)
+    val correctAnswer =
+      left.join(right, LeftOuter, Some("l.a".attr===3)).
+        where("r.b".attr === 2 && "l.c".attr === "r.c".attr).analyze
+
+    comparePlans(optimized, correctAnswer)
+  }
+
+  test("joins: push down right outer join #5") {
+    val x = testRelation.subquery('x)
+    val y = testRelation.subquery('y)
+
+    val originalQuery = {
+      x.join(y, RightOuter, Some("y.b".attr === 1 && "x.a".attr === 3))
+        .where("x.b".attr === 2 && "y.b".attr === 2 && "x.c".attr === "y.c".attr)
+    }
+
+    val optimized = Optimize(originalQuery.analyze)
+    val left = testRelation.where('a === 3).subquery('l)
+    val right = testRelation.where('b === 2).subquery('r)
+    val correctAnswer =
+      left.join(right, RightOuter, Some("r.b".attr === 1)).
+        where("l.b".attr === 2 && "l.c".attr === "r.c".attr).analyze
+
+    comparePlans(optimized, correctAnswer)
+  }
+
   test("joins: can't push down") {
     val x = testRelation.subquery('x)
     val y = testRelation.subquery('y)
@@ -233,5 +413,63 @@ class FilterPushdownSuite extends OptimizerTest {
         .analyze
 
     comparePlans(optimized, analysis.EliminateAnalysisOperators(correctAnswer))
+  }
+
+  val testRelationWithArrayType = LocalRelation('a.int, 'b.int, 'c_arr.array(IntegerType))
+
+  test("generate: predicate referenced no generated column") {
+    val originalQuery = {
+      testRelationWithArrayType
+        .generate(Explode(Seq("c"), 'c_arr), true, false, Some("arr"))
+        .where(('b >= 5) && ('a > 6))
+    }
+    val optimized = Optimize(originalQuery.analyze)
+    val correctAnswer = {
+      testRelationWithArrayType
+        .where(('b >= 5) && ('a > 6))
+        .generate(Explode(Seq("c"), 'c_arr), true, false, Some("arr")).analyze
+    }
+
+    comparePlans(optimized, correctAnswer)
+  }
+
+  test("generate: part of conjuncts referenced generated column") {
+    val generator = Explode(Seq("c"), 'c_arr)
+    val originalQuery = {
+      testRelationWithArrayType
+        .generate(generator, true, false, Some("arr"))
+        .where(('b >= 5) && ('c > 6))
+    }
+    val optimized = Optimize(originalQuery.analyze)
+    val referenceResult = {
+      testRelationWithArrayType
+        .where('b >= 5)
+        .generate(generator, true, false, Some("arr"))
+        .where('c > 6).analyze
+    }
+
+    // Since newly generated columns get different ids every time being analyzed
+    // e.g. comparePlans(originalQuery.analyze, originalQuery.analyze) fails.
+    // So we check operators manually here.
+    // Filter("c" > 6)
+    assertResult(classOf[Filter])(optimized.getClass)
+    assertResult(1)(optimized.asInstanceOf[Filter].condition.references.size)
+    assertResult("c"){
+      optimized.asInstanceOf[Filter].condition.references.toSeq(0).name
+    }
+
+    // the rest part
+    comparePlans(optimized.children(0), referenceResult.children(0))
+  }
+
+  test("generate: all conjuncts referenced generated column") {
+    val originalQuery = {
+      testRelationWithArrayType
+        .generate(Explode(Seq("c"), 'c_arr), true, false, Some("arr"))
+        .where(('c > 6) || ('b > 5)).analyze
+    }
+    val optimized = Optimize(originalQuery)
+
+    comparePlans(optimized, originalQuery)
   }
 }

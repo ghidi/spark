@@ -2,6 +2,8 @@
 layout: global
 title: Running Spark on Mesos
 ---
+* This will become a table of contents (this text will be scraped).
+{:toc}
 
 Spark can run on hardware clusters managed by [Apache Mesos](http://mesos.apache.org/).
 
@@ -103,11 +105,11 @@ the `make-distribution.sh` script included in a Spark source tarball/checkout.
 ## Using a Mesos Master URL
 
 The Master URLs for Mesos are in the form `mesos://host:5050` for a single-master Mesos
-cluster, or `zk://host:2181` for a multi-master Mesos cluster using ZooKeeper.
+cluster, or `mesos://zk://host:2181` for a multi-master Mesos cluster using ZooKeeper.
 
 The driver also needs some configuration in `spark-env.sh` to interact properly with Mesos:
 
-1. In `spark.env.sh` set some environment variables:
+1. In `spark-env.sh` set some environment variables:
  * `export MESOS_NATIVE_LIBRARY=<path to libmesos.so>`. This path is typically
    `<prefix>/lib/libmesos.so` where the prefix is `/usr/local` by default. See Mesos installation
    instructions above. On Mac OS X, the library is called `libmesos.dylib` instead of
@@ -116,7 +118,7 @@ The driver also needs some configuration in `spark-env.sh` to interact properly 
 2. Also set `spark.executor.uri` to `<URL of spark-{{site.SPARK_VERSION}}.tar.gz>`.
 
 Now when starting a Spark application against the cluster, pass a `mesos://`
-or `zk://` URL as the master when creating a `SparkContext`. For example:
+URL as the master when creating a `SparkContext`. For example:
 
 {% highlight scala %}
 val conf = new SparkConf()
@@ -125,6 +127,10 @@ val conf = new SparkConf()
   .set("spark.executor.uri", "<path to spark-{{site.SPARK_VERSION}}.tar.gz uploaded above>")
 val sc = new SparkContext(conf)
 {% endhighlight %}
+
+(You can also use [`spark-submit`](submitting-applications.html) and configure `spark.executor.uri`
+in the [conf/spark-defaults.conf](configuration.html#loading-default-configurations) file. Note
+that `spark-submit` currently only supports deploying the Spark driver in `client` mode for Mesos.)
 
 When running a shell, the `spark.executor.uri` parameter is inherited from `SPARK_EXECUTOR_URI`, so
 it does not need to be redundantly passed in as a system property.
@@ -161,6 +167,8 @@ acquire. By default, it will acquire *all* cores in the cluster (that get offere
 only makes sense if you run just one application at a time. You can cap the maximum number of cores
 using `conf.set("spark.cores.max", "10")` (for example).
 
+# Known issues
+- When using the "fine-grained" mode, make sure that your executors always leave 32 MB free on the slaves. Otherwise it can happen that your Spark job does not proceed anymore. Currently, Apache Mesos only offers resources if there are at least 32 MB memory allocatable. But as Spark allocates memory only for the executor and cpu only for tasks, it can happen on high slave memory usage that no new tasks will be started anymore. More details can be found in [MESOS-1688](https://issues.apache.org/jira/browse/MESOS-1688). Alternatively use the "coarse-gained" mode, which is not affected by this issue.
 
 # Running Alongside Hadoop
 
@@ -176,6 +184,49 @@ node. Please refer to [Hadoop on Mesos](https://github.com/mesos/hadoop).
 
 In either case, HDFS runs separately from Hadoop MapReduce, without being scheduled through Mesos.
 
+
+# Configuration
+
+See the [configuration page](configuration.html) for information on Spark configurations.  The following configs are specific for Spark on Mesos.
+
+#### Spark Properties
+
+<table class="table">
+<tr><th>Property Name</th><th>Default</th><th>Meaning</th></tr>
+<tr>
+  <td><code>spark.mesos.coarse</code></td>
+  <td>false</td>
+  <td>
+    Set the run mode for Spark on Mesos. For more information about the run mode, refer to #Mesos Run Mode section above.
+  </td>
+</tr>
+<tr>
+  <td><code>spark.mesos.extra.cores</code></td>
+  <td>0</td>
+  <td>
+    Set the extra amount of cpus to request per task. This setting is only used for Mesos coarse grain mode.
+    The total amount of cores requested per task is the number of cores in the offer plus the extra cores configured.
+    Note that total amount of cores the executor will request in total will not exceed the spark.cores.max setting.
+  </td>
+</tr>
+<tr>
+  <td><code>spark.mesos.executor.home</code></td>
+  <td>SPARK_HOME</td>
+  <td>
+    The location where the mesos executor will look for Spark binaries to execute, and uses the SPARK_HOME setting on default.
+    This variable is only used when no spark.executor.uri is provided, and assumes Spark is installed on the specified location
+    on each slave.
+  </td>
+</tr>
+<tr>
+  <td><code>spark.mesos.executor.memoryOverhead</code></td>
+  <td>384</td>
+  <td>
+    The amount of memory that Mesos executor will request for the task to account for the overhead of running the executor itself.
+    The final total amount of memory allocated is the maximum value between executor memory plus memoryOverhead, and overhead fraction (1.07) plus the executor memory.
+  </td>
+</tr>
+</table>
 
 # Troubleshooting and Debugging
 

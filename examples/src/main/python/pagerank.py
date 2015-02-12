@@ -15,9 +15,13 @@
 # limitations under the License.
 #
 
-#!/usr/bin/env python
+"""
+This is an example implementation of PageRank. For more conventional use,
+Please refer to PageRank implementation provided by graphx
+"""
 
-import re, sys
+import re
+import sys
 from operator import add
 
 from pyspark import SparkContext
@@ -26,7 +30,8 @@ from pyspark import SparkContext
 def computeContribs(urls, rank):
     """Calculates URL contributions to the rank of other URLs."""
     num_urls = len(urls)
-    for url in urls: yield (url, rank / num_urls)
+    for url in urls:
+        yield (url, rank / num_urls)
 
 
 def parseNeighbors(urls):
@@ -39,6 +44,9 @@ if __name__ == "__main__":
     if len(sys.argv) != 3:
         print >> sys.stderr, "Usage: pagerank <file> <iterations>"
         exit(-1)
+
+    print >> sys.stderr,  """WARN: This is a naive implementation of PageRank and is
+          given as an example! Please refer to PageRank implementation provided by graphx"""
 
     # Initialize the spark context.
     sc = SparkContext(appName="PythonPageRank")
@@ -59,8 +67,8 @@ if __name__ == "__main__":
     # Calculates and updates URL ranks continuously using PageRank algorithm.
     for iteration in xrange(int(sys.argv[2])):
         # Calculates URL contributions to the rank of other URLs.
-        contribs = links.join(ranks).flatMap(lambda (url, (urls, rank)):
-            computeContribs(urls, rank))
+        contribs = links.join(ranks).flatMap(
+            lambda (url, (urls, rank)): computeContribs(urls, rank))
 
         # Re-calculates URL ranks based on neighbor contributions.
         ranks = contribs.reduceByKey(add).mapValues(lambda rank: rank * 0.85 + 0.15)
@@ -68,3 +76,5 @@ if __name__ == "__main__":
     # Collects all URL ranks and dump them to console.
     for (link, rank) in ranks.collect():
         print "%s has rank: %s." % (link, rank)
+
+    sc.stop()
